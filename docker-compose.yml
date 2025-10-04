@@ -1,0 +1,256 @@
+services:
+  # --------------------------- reverse proxy ---------------------------
+  traefik:
+    image: traefik:v3.1
+    restart: unless-stopped
+    command:
+      - --providers.docker=true
+      - --providers.docker.exposedbydefault=false
+      - --entrypoints.web.address=:80
+      - --entrypoints.websecure.address=:443
+      - --entrypoints.web.http.redirections.entrypoint.to=websecure
+      - --entrypoints.web.http.redirections.entrypoint.scheme=https
+      - --certificatesresolvers.le.acme.tlschallenge=true
+      - --certificatesresolvers.le.acme.email=noreply@tokas.com.ua
+      - --certificatesresolvers.le.acme.storage=/acme/acme.json
+      - --api.dashboard=true
+      - --log.level=DEBUG
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./traefik/acme:/acme
+    networks:
+      - proxy
+      - edge
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.dashboard.entrypoints=websecure
+      - traefik.http.routers.dashboard.tls=true
+      - traefik.http.routers.dashboard.tls.certresolver=le
+      - traefik.http.routers.dashboard.service=api@internal
+      - traefik.http.routers.dashboard.rule=Host(`dashboard.tokas.com.ua`)
+
+      - traefik.http.middlewares.dash-redirect.redirectregex.regex=^/$
+      - traefik.http.middlewares.dash-redirect.redirectregex.replacement=/dashboard/
+      - traefik.http.routers.dashboard.middlewares=dash-redirect
+
+  nextcloud:
+    image: nextcloud:29-apache
+    env_file:
+      - ./env/base.env
+    restart: unless-stopped
+    depends_on: [db, redis]
+    environment:
+      - MYSQL_HOST=db
+      - MYSQL_DATABASE=${NC_DB_NAME}
+      - MYSQL_USER=${NC_DB_USER}
+      - MYSQL_PASSWORD=${NC_DB_PASS}
+      - REDIS_HOST=redis
+      - OVERWRITEPROTOCOL=https
+      - APACHE_DISABLE_REWRITE_IP=1
+    volumes:
+      - nextcloud_data:/var/www/html
+    networks:
+      - proxy
+      - internal
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=proxy
+      - traefik.http.routers.nextcloud.rule=Host(`tokas.com.ua`)
+      - traefik.http.routers.nextcloud.entrypoints=websecure
+      - traefik.http.routers.nextcloud.tls=true
+      - traefik.http.routers.nextcloud.tls.certresolver=le
+      - traefik.http.services.nextcloud.loadbalancer.server.port=80
+
+  nextcloud-cron:
+    image: nextcloud:29-apache
+    restart: unless-stopped
+    depends_on: [nextcloud]
+    env_file:
+      - ./env/base.env                 # optional; harmless to include
+    volumes:
+      - nextcloud_data:/var/www/html   # EXACTLY the same as in nextcloud
+    entrypoint: ["/cron.sh"]
+    networks: [internal]
+
+  kuma-heartbeat:
+    image: curlimages/curl:8.7.1
+    restart: unless-stopped
+    environment:
+      - PUSH_URL=https://status.tokas.com.ua/api/push/SK0skHj80J?status=up&msg=OK
+      - INTERVAL=600
+    entrypoint: ["/bin/sh","-lc","while true; do curl -fsS \"$$PUSH_URL\" >/dev/null || true; sleep \"$$INTERVAL\"; done"]
+    networks: [internal]
+
+  # --------------------------- nextcloud stack -------------------------
+  db:
+    image: mariadb:11
+    restart: unless-stopped
+    command: --transaction-isolation=READ-COMMITTED --binlog-format=ROW
+    env_file:
+      - ./env/base.env
+    environment:
+      - MYSQL_ROOT_PASSWORD=${NC_DB_ROOT}
+      - MYSQL_DATABASE=${NC_DB_NAME}
+      - MYSQL_USER=${NC_DB_USER}
+      - MYSQL_PASSWORD=${NC_DB_PASS}
+    volumes:
+      - db_data:/var/lib/mysql
+    networks:
+      - internal
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -u$${MYSQL_USER} -p$${MYSQL_PASSWORD} --silent"]
+      interval: 30s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server","--appendonly","yes"]
+    volumes:
+      - ./redis:/data
+    networks:
+      - internal
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 5s
+      retries: 10
+
+  # --------------------------- utilities -------------------------------
+  sftp:
+    image: atmoz/sftp:alpine
+    restart: unless-stopped
+    ports:
+      - "2222:22"
+    networks:
+      - internal
+
+  kuma:
+    image: louislam/uptime-kuma:1
+    restart: unless-stopped
+    volumes:
+      - kuma_data:/app/data
+    networks:
+      - proxy
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=proxy
+
+      - traefik.http.routers.kuma.rule=Host(`status.tokas.com.ua`)
+      - traefik.http.routers.kuma.entrypoints=websecure
+      - traefik.http.routers.kuma.tls=true
+      - traefik.http.routers.kuma.tls.certresolver=le
+      - traefik.http.services.kuma.loadbalancer.server.port=3001
+
+      - traefik.http.routers.kuma-http.rule=Host(`status.tokas.com.ua`)
+      - traefik.http.routers.kuma-http.entrypoints=web
+
+  sftpgo:
+    image: drakkan/sftpgo:latest
+    container_name: sftpgo
+    restart: unless-stopped
+    env_file:
+      - ./env/base.env
+    environment:
+      - TZ=Europe/Kyiv
+      - SFTPGO_SMTP__HOST=mail.tokas.com.ua
+      - SFTPGO_SMTP__PORT=587
+      - SFTPGO_SMTP__FROM="SFTPGo <noreply@tokas.com.ua>"
+      - SFTPGO_SMTP__USER=${SMTP_USER}
+      - SFTPGO_SMTP__PASSWORD=${SMTP_PASS}
+      - SFTPGO_SMTP__AUTH_TYPE=1      # LOGIN
+      - SFTPGO_SMTP__ENCRYPTION=2     # STARTTLS
+      - SFTPGO_SMTP__DOMAIN=tokas.com.ua
+      - SFTPGO_DEFAULT_ADMIN_USERNAME=${SFTPGO_ADMIN}
+      - SFTPGO_DEFAULT_ADMIN_PASSWORD=${SFTPGO_ADMIN_PASS}
+    volumes:
+      - ./sftpgo/data:/var/lib/sftpgo
+      - ./sftpgo/home:/home
+    ports:
+      - "2022:2022"
+      - "2121:2121"
+      - "50000-50100:50000-50100"
+      - "8080:8080"
+    networks: [proxy]
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=proxy
+      - traefik.http.routers.sftpgo.rule=Host(`sftp.tokas.com.ua`)
+      - traefik.http.routers.sftpgo.entrypoints=websecure
+      - traefik.http.routers.sftpgo.tls=true
+      - traefik.http.routers.sftpgo.tls.certresolver=le
+      - traefik.http.routers.sftpgo.middlewares=secure-headers
+      - traefik.http.services.sftpgo.loadbalancer.server.port=8080
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+
+  # --- backup jobs (run on-demand) ---
+  dumpdb:
+    image: mariadb:11
+    env_file: [ ./env/base.env ]
+    entrypoint:
+      - sh
+      - -lc
+      - |
+        DUMP_BIN="$$(command -v mariadb-dump || command -v mysqldump)"
+        exec "$$DUMP_BIN" -h db -u"$$NC_DB_USER" -p"$$NC_DB_PASS" "$$NC_DB_NAME" \
+          | gzip > /backup/db-$$(date +%F-%H%M).sql.gz
+    volumes:
+      - ./backups:/backup
+    networks: [ internal ]
+
+  restic:
+    image: restic/restic:0.16.4
+    user: "0:0"
+    env_file: [ ./env/restic.env ]
+    entrypoint:
+      - sh
+      - -lc
+      - |
+        restic snapshots >/dev/null 2>&1 || restic init
+        restic backup \
+          /data/nextcloud \
+          /data/kuma \
+          /data/letsencrypt \
+          /data/sftpgo \
+          /backup \
+          /src/compose.yml \
+          /src/base.env \
+          --tag homestack
+        restic forget --keep-daily 7 --keep-weekly 4 --keep-monthly 6 --prune
+    volumes:
+      # named volumes (readonly)
+      - nextcloud_data:/data/nextcloud:ro
+      - kuma_data:/data/kuma:ro
+      # bind mounts (readonly)
+      - ./traefik/acme:/data/letsencrypt:ro
+      - ./sftpgo:/data/sftpgo:ro
+      - ./backups:/backup:ro
+      # include minimal metadata for disaster recovery
+      - ./docker-compose.yml:/src/compose.yml:ro
+      - ./env/base.env:/src/base.env:ro
+    networks: [ internal ]
+
+# ------------------------------- volumes -------------------------------
+volumes:
+  db_data:
+  nextcloud_data:
+  kuma_data:
+
+# ------------------------------- networks ------------------------------
+networks:
+  proxy:
+    external: true
+    name: proxy
+  internal:
+    driver: bridge
+  edge:
+    external: true
+    name: edge

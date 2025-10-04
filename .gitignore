@@ -1,0 +1,30 @@
+# secrets & envs
+.env
+.env.local
+*.env
+env/*.env
+!*.env.example
+
+# runtime/state
+backups/
+redis/
+kuma_data/
+sftpgo/data/
+sftpgo/home/
+traefik/acme/
+**/acme.json
+**/dump.rdb
+**/appendonly*
+.backup.lock
+
+# misc
+docker-compose.yml.bak
+*.crt
+*.key
+*.pem
+
+# OS/IDE
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
