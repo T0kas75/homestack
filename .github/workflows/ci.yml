@@ -1,0 +1,10 @@
+name: CI
+on:
+  pull_request: { branches: [ main ] }
+  push:         { branches: [ main ] }
+jobs:
+  validate-compose:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker compose -f docker-compose.yml config -q
