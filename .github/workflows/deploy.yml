@@ -1,0 +1,39 @@
+name: Deploy
+on:
+  workflow_dispatch: {}
+  push:
+    tags: [ 'v*.*.*' ]     # optional: run when you create a tag
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: SSH deploy
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host:     ${{ secrets.PROD_HOST }}
+          username: ${{ secrets.PROD_USER }}
+          key:      ${{ secrets.PROD_SSH_KEY }}
+          port:     ${{ secrets.PROD_SSH_PORT || 22 }}
+          script_stop: true
+          script: |
+            set -euo pipefail
+            APP_DIR="${{ secrets.PROD_PATH }}"   # /opt/homestack
+            REPO="https://github.com/${{ github.repository }}.git"
+            BRANCH="main"
+
+            if [ ! -d "$APP_DIR/.git" ]; then
+              sudo mkdir -p "$APP_DIR" && sudo chown -R $USER: "$APP_DIR"
+              git clone --branch "$BRANCH" --depth 1 "$REPO" "$APP_DIR"
+            else
+              cd "$APP_DIR"
+              git fetch --depth 1 origin "$BRANCH"
+              git reset --hard "origin/$BRANCH"
+            fi
+
+            cd "$APP_DIR"
+            [ -f env/base.env ] || { echo "Missing env/base.env on server"; exit 1; }
+            docker compose --env-file env/base.env pull
+            docker compose --env-file env/base.env up -d --remove-orphans
+            docker image prune -f
