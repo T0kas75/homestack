@@ -39,7 +39,7 @@ services:
   nextcloud:
     image: nextcloud:29-apache
     env_file:
-      - ./env/base.env
+      - ${ENV_FILE:-env/base.env}
     restart: unless-stopped
     depends_on: [db, redis]
     environment:
@@ -69,7 +69,7 @@ services:
     restart: unless-stopped
     depends_on: [nextcloud]
     env_file:
-      - ./env/base.env                 # optional; harmless to include
+      - ${ENV_FILE:-env/base.env}                 # optional; harmless to include
     volumes:
       - nextcloud_data:/var/www/html   # EXACTLY the same as in nextcloud
     entrypoint: ["/cron.sh"]
@@ -90,7 +90,7 @@ services:
     restart: unless-stopped
     command: --transaction-isolation=READ-COMMITTED --binlog-format=ROW
     env_file:
-      - ./env/base.env
+      - ${ENV_FILE:-env/base.env}
     environment:
       - MYSQL_ROOT_PASSWORD=${NC_DB_ROOT}
       - MYSQL_DATABASE=${NC_DB_NAME}
@@ -154,7 +154,7 @@ services:
     container_name: sftpgo
     restart: unless-stopped
     env_file:
-      - ./env/base.env
+      - ${ENV_FILE:-env/base.env}
     environment:
       - TZ=Europe/Kyiv
       - SFTPGO_SMTP__HOST=mail.tokas.com.ua
@@ -194,7 +194,8 @@ services:
   # --- backup jobs (run on-demand) ---
   dumpdb:
     image: mariadb:11
-    env_file: [ ./env/base.env ]
+    env_file:
+      - ${ENV_FILE:-env/base.env}
     entrypoint:
       - sh
       - -lc
@@ -209,7 +210,8 @@ services:
   restic:
     image: restic/restic:0.16.4
     user: "0:0"
-    env_file: [ ./env/restic.env ]
+    env_file:
+      - ${ENV_FILE:-env/base.env}
     entrypoint:
       - sh
       - -lc
