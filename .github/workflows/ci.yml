@@ -1,12 +1,24 @@
+# .github/workflows/ci.yml
 name: CI
 on:
   pull_request: { branches: [ main ] }
   push:         { branches: [ main ] }
+
 jobs:
   validate-compose:
     runs-on: ubuntu-latest
-    env:
-      ENV_FILE: .env.example
     steps:
       - uses: actions/checkout@v4
-      - run: docker compose -f docker-compose.yml config -q
+
+      - name: Create CI .env from example
+        run: |
+          if [ ! -f .env.example ]; then
+            echo "::error::.env.example is missing"; exit 1
+          fi
+          cp .env.example .env
+          echo "Created CI stub .env:"
+          head -n 50 .env
+
+      - name: Validate docker-compose
+        run: docker compose -f docker-compose.yml config -q
+
