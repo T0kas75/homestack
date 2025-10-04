@@ -1,8 +1,8 @@
 name: Deploy
 on:
   workflow_dispatch: {}
-  push:
-    tags: [ 'v*.*.*' ]     # optional: run when you create a tag
+  # optional auto-deploy:
+  # push: { branches: [ main ] }
 
 jobs:
   deploy:
@@ -10,31 +10,51 @@ jobs:
     environment: production
     steps:
       - uses: actions/checkout@v4
-      - name: SSH deploy
-        uses: appleboy/ssh-action@v1.2.0
+
+      - name: Load SSH key
+        uses: webfactory/ssh-agent@v0.9.0
         with:
-          host:     ${{ secrets.PROD_HOST }}
-          username: ${{ secrets.PROD_USER }}
-          key:      ${{ secrets.PROD_SSH_KEY }}
-          port:     ${{ secrets.PROD_SSH_PORT || 22 }}
-          script_stop: true
-          script: |
-            set -euo pipefail
-            APP_DIR="${{ secrets.PROD_PATH }}"   # /opt/homestack
-            REPO="https://github.com/${{ github.repository }}.git"
-            BRANCH="main"
+          ssh-private-key: ${{ secrets.PROD_SSH_KEY }}
 
-            if [ ! -d "$APP_DIR/.git" ]; then
-              sudo mkdir -p "$APP_DIR" && sudo chown -R $USER: "$APP_DIR"
-              git clone --branch "$BRANCH" --depth 1 "$REPO" "$APP_DIR"
-            else
-              cd "$APP_DIR"
-              git fetch --depth 1 origin "$BRANCH"
-              git reset --hard "origin/$BRANCH"
-            fi
+      - name: Smoke test (prove SSH works & path visible)
+        run: |
+          set -eux
+          ssh -o StrictHostKeyChecking=no -p "${{ secrets.PROD_SSH_PORT }}" \
+            "${{ secrets.PROD_USER }}@${{ secrets.PROD_HOST }}" \
+            "echo CONNECTED; whoami; pwd; ls -la '${{ secrets.PROD_PATH }}' || true"
 
-            cd "$APP_DIR"
-            [ -f env/base.env ] || { echo "Missing env/base.env on server"; exit 1; }
-            docker compose --env-file env/base.env pull
-            docker compose --env-file env/base.env up -d --remove-orphans
-            docker image prune -f
+      - name: Deploy
+        run: |
+          set -eux
+          ssh -o StrictHostKeyChecking=no -p "${{ secrets.PROD_SSH_PORT }}" \
+            "${{ secrets.PROD_USER }}@${{ secrets.PROD_HOST }}" 'bash -lc "
+              set -euxo pipefail
+              APP_DIR=\"${{ secrets.PROD_PATH }}\"
+              BRANCH=\"main\"
+              REPO_URL=\"https://github.com/${{ github.repository }}.git\"   # if repo is private, use SSH URL below
+              # REPO_URL=\"git@github.com:T0kas75/homestack.git\"
+
+              mkdir -p \"\$APP_DIR\"
+              if [ ! -d \"\$APP_DIR/.git\" ]; then
+                git clone --branch \"\$BRANCH\" --depth 1 \"\$REPO_URL\" \"\$APP_DIR\"
+              else
+                git -C \"\$APP_DIR\" fetch --depth 1 origin \"\$BRANCH\"
+                git -C \"\$APP_DIR\" reset --hard \"origin/\$BRANCH\"
+              fi
+
+              # use .env — not base.env
+              test -f \"\$APP_DIR/.env\" || { echo \"ERROR: \$APP_DIR/.env missing\"; exit 1; }
+
+              cd \"\$APP_DIR\"
+              if docker compose version >/dev/null 2>&1; then C=\"docker compose\"; \
+              elif command -v docker-compose >/dev/null 2>&1; then C=\"docker-compose\"; \
+              else echo \"ERROR: docker compose not installed\"; exit 1; fi
+
+              \$C -f docker-compose.yml config -q
+              \$C -f docker-compose.yml pull
+              \$C -f docker-compose.yml up -d --remove-orphans
+
+              echo HEAD: \$(git -C \"\$APP_DIR\" rev-parse --short HEAD)
+              echo FILE:
+              head -n 5 \"\$APP_DIR/testfile for CI CD\" || true
+            "'

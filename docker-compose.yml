@@ -39,7 +39,7 @@ services:
   nextcloud:
     image: nextcloud:29-apache
     env_file:
-      - ${ENV_FILE:-env/base.env}
+      - ./.env
     restart: unless-stopped
     depends_on: [db, redis]
     environment:
@@ -69,7 +69,7 @@ services:
     restart: unless-stopped
     depends_on: [nextcloud]
     env_file:
-      - ${ENV_FILE:-env/base.env}                 # optional; harmless to include
+      - ./.env                 # optional; harmless to include
     volumes:
       - nextcloud_data:/var/www/html   # EXACTLY the same as in nextcloud
     entrypoint: ["/cron.sh"]
@@ -90,7 +90,7 @@ services:
     restart: unless-stopped
     command: --transaction-isolation=READ-COMMITTED --binlog-format=ROW
     env_file:
-      - ${ENV_FILE:-env/base.env}
+      - ./.env
     environment:
       - MYSQL_ROOT_PASSWORD=${NC_DB_ROOT}
       - MYSQL_DATABASE=${NC_DB_NAME}
@@ -154,7 +154,7 @@ services:
     container_name: sftpgo
     restart: unless-stopped
     env_file:
-      - ${ENV_FILE:-env/base.env}
+      - ./.env
     environment:
       - TZ=Europe/Kyiv
       - SFTPGO_SMTP__HOST=mail.tokas.com.ua
@@ -195,7 +195,7 @@ services:
   dumpdb:
     image: mariadb:11
     env_file:
-      - ${ENV_FILE:-env/base.env}
+      - ./.env
     entrypoint:
       - sh
       - -lc
@@ -211,7 +211,7 @@ services:
     image: restic/restic:0.16.4
     user: "0:0"
     env_file:
-      - ${ENV_FILE:-env/base.env}
+      - ./.env
     entrypoint:
       - sh
       - -lc
@@ -237,7 +237,7 @@ services:
       - ./backups:/backup:ro
       # include minimal metadata for disaster recovery
       - ./docker-compose.yml:/src/compose.yml:ro
-      - ./env/base.env:/src/base.env:ro
+      - ././.env:/src/base.env:ro
     networks: [ internal ]
 
 # ------------------------------- volumes -------------------------------
