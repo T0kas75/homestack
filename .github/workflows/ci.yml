@@ -6,7 +6,7 @@ jobs:
   validate-compose:
     runs-on: ubuntu-latest
     env:
-      ENV_FILE: env/base.env.example
+      ENV_FILE: .env.example
     steps:
       - uses: actions/checkout@v4
       - run: docker compose -f docker-compose.yml config -q
